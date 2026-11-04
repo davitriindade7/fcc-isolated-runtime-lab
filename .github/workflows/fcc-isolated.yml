@@ -31,11 +31,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker build --pull --tag fcc-audited-test:local --file - upstream <<'DOCKERFILE'
+          docker build --pull --build-arg "FCC_SHA=$FCC_SHA" --tag fcc-audited-test:local --file - upstream <<'DOCKERFILE'
           FROM python:3.14.10-slim-bookworm
+          RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
           RUN python -m pip install --no-cache-dir uv==0.13.7
           WORKDIR /opt/fcc
           COPY . .
+          ARG FCC_SHA
+          RUN test "$(git rev-parse HEAD)" = "$FCC_SHA"
           RUN uv sync --locked --group dev --no-progress
           ENV PATH="/opt/fcc/.venv/bin:${PATH}"
           DOCKERFILE
