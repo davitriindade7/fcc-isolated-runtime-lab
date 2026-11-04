@@ -1,0 +1,62 @@
+# Public-only, manual laboratory workflow. Never copy production credentials here.
+name: FCC upstream - isolated fallback contracts
+
+on:
+  workflow_dispatch:
+
+# No write access to the repository and no credentialed checkout.
+permissions: {}
+
+concurrency:
+  group: fcc-isolated-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upstream-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FCC_SHA: 1c72f5fef14249936902aa7927348caec29939d6
+    steps:
+      - name: Checkout audited public FCC source, without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/Alishahryar1/free-claude-code.git upstream
+          git -C upstream checkout --detach "$FCC_SHA"
+          test "$(git -C upstream rev-parse HEAD)" = "$FCC_SHA"
+          test -f upstream/uv.lock
+
+      - name: Build isolated test image (public dependencies only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --pull --tag fcc-audited-test:local --file - upstream <<'DOCKERFILE'
+          FROM python:3.14.10-slim-bookworm
+          RUN python -m pip install --no-cache-dir uv==0.13.7
+          WORKDIR /opt/fcc
+          COPY . .
+          RUN uv sync --locked --group dev --no-progress
+          ENV PATH="/opt/fcc/.venv/bin:${PATH}"
+          DOCKERFILE
+
+      - name: Run genuine FCC fallback tests without external network
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 128 \
+            --memory 2g \
+            --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --user 65534:65534 \
+            --env HOME=/tmp \
+            --env PYTHONDONTWRITEBYTECODE=1 \
+            fcc-audited-test:local \
+            python -m pytest -q -p no:cacheprovider -o 'addopts=' \
+              tests/api/test_model_fallback.py \
+              tests/api/test_midstream_model_fallback.py
